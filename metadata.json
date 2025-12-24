@@ -1,0 +1,8 @@
+{
+  "name": "SceneShop - Shoppable Trailers",
+  "description": "A high-end movie trailer platform where you can pause any scene to instantly discover and shop for products seen on screen using AI-powered visual recognition.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
