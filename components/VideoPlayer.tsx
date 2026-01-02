@@ -9,15 +9,13 @@ import {
   Loader2, 
   X, 
   RefreshCw, 
-  Volume2, 
-  Maximize, 
   ChevronLeft, 
-  Search,
-  Rewind,
-  FastForward,
-  ShoppingCart,
-  AlertCircle,
-  Youtube
+  Rewind, 
+  FastForward, 
+  ShoppingCart, 
+  AlertCircle, 
+  Youtube, 
+  UploadCloud 
 } from 'lucide-react';
 
 interface VideoPlayerProps {
@@ -25,7 +23,6 @@ interface VideoPlayerProps {
   onClose: () => void;
 }
 
-// Global YouTube API tracker
 declare global {
   interface Window {
     onYouTubeIframeAPIReady: () => void;
@@ -56,6 +53,8 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
     return !!movie.videoUrl.match(regExp);
   }, [movie.videoUrl]);
 
+  const isLocal = movie.genre.includes('Local');
+
   const getYTId = useCallback(() => {
     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
     const match = movie.videoUrl.match(regExp);
@@ -82,7 +81,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
       
       await new Promise((resolve, reject) => {
         img.onload = resolve;
-        img.onerror = () => reject(new Error("Failed to load YouTube thumbnail for analysis"));
+        img.onerror = () => reject(new Error("Failed to load YouTube thumbnail"));
       });
 
       canvas.width = img.width;
@@ -92,67 +91,80 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
       const base64Image = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
       const detectedProducts = await analyzeFrame(base64Image);
       
-      setAnalysis({
-        isAnalyzing: false,
-        products: detectedProducts,
-        error: null,
-      });
+      setAnalysis({ isAnalyzing: false, products: detectedProducts, error: null });
     } catch (err: any) {
-      console.error("YouTube analysis error:", err);
       setAnalysis({
         isAnalyzing: false,
         products: [],
-        error: "AI cannot access frames from this YouTube video directly. We analyzed the video preview instead.",
+        error: "YouTube blocks direct frame scanning. We analyzed the high-res thumbnail instead.",
       });
     }
   };
 
   const handlePauseAndAnalyze = useCallback(async () => {
-    if (isYouTube()) {
-      return analyzeYouTubeThumbnail();
-    }
+    if (isYouTube()) return analyzeYouTubeThumbnail();
 
-    if (!videoRef.current || !canvasRef.current || videoError) return;
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
 
+    if (!video || !canvas || videoError) return;
+
+    // Reset analysis UI
     setAnalysis({ isAnalyzing: true, products: [], error: null });
 
     try {
-      const canvas = canvasRef.current;
-      const video = videoRef.current;
-      const context = canvas.getContext('2d', { willReadFrequently: true });
-
-      if (context) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        
-        setTimeout(async () => {
-          try {
-            context.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const base64Image = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-            const detectedProducts = await analyzeFrame(base64Image);
-            
-            setAnalysis({
-              isAnalyzing: false,
-              products: detectedProducts,
-              error: null,
-            });
-          } catch (canvasErr: any) {
-            setAnalysis({
-              isAnalyzing: false,
-              products: [],
-              error: "Security policies (CORS) blocked frame analysis for this direct link.",
-            });
-          }
-        }, 150);
+      // Ensure video metadata is actually ready
+      if (video.readyState < 2) {
+        throw new Error("Video data not ready for capture. Please try pausing again.");
       }
-    } catch (err) {
+
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) throw new Error("Failed to initialize canvas context.");
+
+      // Use actual video dimensions
+      const width = video.videoWidth || 1280;
+      const height = video.videoHeight || 720;
+      
+      canvas.width = width;
+      canvas.height = height;
+
+      // Small delay to ensure the 'pause' frame is actually rendered by the GPU
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      try {
+        context.drawImage(video, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        
+        // Final sanity check: dataURL should be reasonably long
+        if (dataUrl.length < 1000) {
+          throw new Error("Captured frame is empty or corrupted.");
+        }
+
+        const base64Image = dataUrl.split(',')[1];
+        const detectedProducts = await analyzeFrame(base64Image);
+        
+        setAnalysis({
+          isAnalyzing: false,
+          products: detectedProducts,
+          error: null,
+        });
+      } catch (drawErr: any) {
+        console.error("Frame capture failure:", drawErr);
+        setAnalysis({
+          isAnalyzing: false,
+          products: [],
+          error: `Frame capture failed: ${drawErr.message || "Unknown error"}.`,
+        });
+      }
+    } catch (err: any) {
+      console.error("Analysis sequence failure:", err);
       setAnalysis({
         isAnalyzing: false,
         products: [],
-        error: "Failed to analyze products in this scene.",
+        error: err.message || "Failed to initiate AI analysis. Please check your internet connection.",
       });
     }
-  }, [videoError, isYouTube, getYTId]);
+  }, [videoError, isYouTube, getYTId, isLocal]);
 
   useEffect(() => {
     if (!isYouTube()) return;
@@ -161,26 +173,18 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
       if (!ytContainerRef.current) return;
       ytPlayerRef.current = new window.YT.Player(ytContainerRef.current, {
         videoId: getYTId(),
-        playerVars: {
-          autoplay: 1,
-          controls: 0,
-          rel: 0,
-          showinfo: 0,
-          modestbranding: 1,
-        },
+        playerVars: { autoplay: 1, controls: 0, rel: 0, modestbranding: 1 },
         events: {
-          onReady: () => {
-            setIsYTReady(true);
-            setIsVideoLoading(false);
-          },
+          onReady: () => { setIsYTReady(true); setIsVideoLoading(false); },
           onStateChange: (event: any) => {
-            if (event.data === 1) {
-              setIsPlaying(true);
-              setIsPaused(false);
-            } else if (event.data === 2) {
-              setIsPlaying(false);
-              setIsPaused(true);
-              handlePauseAndAnalyze();
+            if (event.data === 1) { 
+              setIsPlaying(true); 
+              setIsPaused(false); 
+              setAnalysis({ isAnalyzing: false, products: [], error: null });
+            } else if (event.data === 2) { 
+              setIsPlaying(false); 
+              setIsPaused(true); 
+              handlePauseAndAnalyze(); 
             }
           },
           onError: () => setVideoError("YouTube player failed to load."),
@@ -189,7 +193,6 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
     };
 
     if (!window.YT) {
-      // Check if the script is already added to head
       if (!document.getElementById('youtube-api')) {
         const tag = document.createElement('script');
         tag.id = 'youtube-api';
@@ -197,38 +200,25 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
         const firstScriptTag = document.getElementsByTagName('script')[0];
         firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
       }
-      
-      const prevHandler = window.onYouTubeIframeAPIReady;
-      window.onYouTubeIframeAPIReady = () => {
-        if (prevHandler) prevHandler();
-        createPlayer();
-      };
-    } else if (window.YT && window.YT.Player) {
+      window.onYouTubeIframeAPIReady = createPlayer;
+    } else {
       createPlayer();
     }
 
-    return () => {
-      if (ytPlayerRef.current) {
-        try {
-          ytPlayerRef.current.destroy();
-        } catch (e) {}
-      }
-    };
+    return () => { if (ytPlayerRef.current) ytPlayerRef.current.destroy(); };
   }, [isYouTube, getYTId, handlePauseAndAnalyze]);
 
-  const togglePlay = (e?: React.MouseEvent | KeyboardEvent) => {
+  const togglePlay = (e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (isYouTube() && isYTReady) {
       const state = ytPlayerRef.current.getPlayerState();
-      if (state === 1) ytPlayerRef.current.pauseVideo();
-      else ytPlayerRef.current.playVideo();
+      state === 1 ? ytPlayerRef.current.pauseVideo() : ytPlayerRef.current.playVideo();
     } else if (videoRef.current && !videoError) {
-      if (videoRef.current.paused) videoRef.current.play();
-      else videoRef.current.pause();
+      videoRef.current.paused ? videoRef.current.play() : videoRef.current.pause();
     }
   };
 
-  const seek = (seconds: number, e?: React.MouseEvent | KeyboardEvent) => {
+  const seek = (seconds: number, e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (isYouTube() && isYTReady) {
       const current = ytPlayerRef.current.getCurrentTime();
@@ -236,13 +226,6 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
     } else if (videoRef.current && !videoError) {
       videoRef.current.currentTime += seconds;
     }
-  };
-
-  const getStoreStyles = (storeName: string) => {
-    const name = storeName.toLowerCase();
-    if (name.includes('amazon')) return 'bg-orange-600 hover:bg-orange-500';
-    if (name.includes('flipkart')) return 'bg-blue-600 hover:bg-blue-500';
-    return 'bg-indigo-600 hover:bg-indigo-500';
   };
 
   return (
@@ -269,8 +252,12 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
                 ref={videoRef}
                 src={movie.videoUrl}
                 className="w-full h-full object-contain"
-                crossOrigin="anonymous"
-                onPlay={() => { setIsPlaying(true); setIsPaused(false); }}
+                crossOrigin={isLocal ? undefined : "anonymous"}
+                onPlay={() => { 
+                  setIsPlaying(true); 
+                  setIsPaused(false); 
+                  setAnalysis({ isAnalyzing: false, products: [], error: null });
+                }}
                 onPause={() => { setIsPlaying(false); setIsPaused(true); handlePauseAndAnalyze(); }}
                 onError={() => setVideoError("Video file failed to load.")}
                 onLoadedData={() => setIsVideoLoading(false)}
@@ -285,11 +272,18 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
           <button onClick={onClose} className="pointer-events-auto flex items-center gap-2 px-4 py-2 bg-black/40 hover:bg-white/10 rounded-full backdrop-blur-xl transition-all border border-white/5 text-sm font-bold">
             <ChevronLeft size={20} /> Back to Browse
           </button>
-          {isYouTube() && (
-            <div className="bg-red-600 px-4 py-1 rounded-full text-[10px] font-black tracking-widest flex items-center gap-2 pointer-events-none">
-              <Youtube size={14} /> YOUTUBE MODE
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            {isYouTube() && (
+              <div className="bg-red-600 px-4 py-1 rounded-full text-[10px] font-black tracking-widest flex items-center gap-2 pointer-events-none">
+                <Youtube size={14} /> YOUTUBE MODE
+              </div>
+            )}
+            {isLocal && (
+              <div className="bg-indigo-600 px-4 py-1 rounded-full text-[10px] font-black tracking-widest flex items-center gap-2 pointer-events-none">
+                <UploadCloud size={14} /> LOCAL FILE (SECURE SCAN)
+              </div>
+            )}
+          </div>
         </div>
 
         {!videoError && (
@@ -297,14 +291,14 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
             <div className="max-w-4xl mx-auto flex items-end justify-between gap-8">
               <div className="flex-1">
                 <h2 className="text-4xl font-display font-bold mb-2">{movie.title}</h2>
-                <p className="text-gray-400 text-sm max-w-xl">{movie.description}</p>
+                <p className="text-gray-400 text-sm max-w-xl line-clamp-2">{movie.description}</p>
               </div>
-              <div className="flex items-center gap-4 bg-black/40 p-2 rounded-full backdrop-blur-xl border border-white/5 shadow-2xl">
-                <button onClick={(e) => seek(-10, e)} className="p-3 text-white/60 hover:text-white"><Rewind size={24} /></button>
-                <button onClick={() => togglePlay()} className="w-16 h-16 bg-white text-black rounded-full flex items-center justify-center hover:scale-110 transition-transform">
+              <div className="flex items-center gap-4 bg-black/40 p-2 rounded-full backdrop-blur-xl border border-white/5 shadow-2xl pointer-events-auto">
+                <button onClick={(e) => seek(-10, e)} className="p-3 text-white/60 hover:text-white transition-colors"><Rewind size={24} /></button>
+                <button onClick={() => togglePlay()} className="w-16 h-16 bg-white text-black rounded-full flex items-center justify-center hover:scale-110 transition-transform active:scale-95">
                   {isPlaying ? <Pause size={28} /> : <Play size={28} fill="black" className="ml-1" />}
                 </button>
-                <button onClick={(e) => seek(10, e)} className="p-3 text-white/60 hover:text-white"><FastForward size={24} /></button>
+                <button onClick={(e) => seek(10, e)} className="p-3 text-white/60 hover:text-white transition-colors"><FastForward size={24} /></button>
               </div>
             </div>
           </div>
@@ -330,16 +324,26 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
           {isPaused && !analysis.isAnalyzing && analysis.products.length > 0 && (
             <div className="space-y-6">
               {analysis.products.map((product) => (
-                <div key={product.id} className="bg-white/5 border border-white/5 rounded-2xl p-6 hover:bg-indigo-500/5 transition-all">
+                <div key={product.id} className="bg-white/5 border border-white/5 rounded-2xl p-6 hover:bg-indigo-500/10 transition-all transform hover:-translate-y-1">
                   <div className="flex justify-between items-start mb-3">
-                    <span className="text-[10px] px-2 py-1 rounded bg-indigo-500/20 text-indigo-300 font-bold uppercase">{product.category}</span>
-                    <span className="font-bold">{product.priceEstimate}</span>
+                    <span className="text-[10px] px-2 py-1 rounded bg-indigo-500/20 text-indigo-300 font-bold uppercase tracking-wider">{product.category}</span>
+                    <span className="font-bold text-indigo-400">{product.priceEstimate}</span>
                   </div>
                   <h5 className="font-bold text-xl mb-2">{product.name}</h5>
-                  <p className="text-sm text-gray-400 mb-6 line-clamp-2">{product.description}</p>
+                  <p className="text-sm text-gray-400 mb-6 line-clamp-2 leading-relaxed">{product.description}</p>
                   <div className="grid grid-cols-2 gap-2">
                     {product.shopLinks.map((link, idx) => (
-                      <a key={idx} href={link.url} target="_blank" rel="noopener noreferrer" className={`flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-xs ${getStoreStyles(link.storeName)}`}>
+                      <a 
+                        key={idx} 
+                        href={link.url} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className={`flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-xs transition-all active:scale-95 ${
+                          link.storeName.toLowerCase().includes('amazon') ? 'bg-orange-600 hover:bg-orange-500' :
+                          link.storeName.toLowerCase().includes('flipkart') ? 'bg-blue-600 hover:bg-blue-500' :
+                          'bg-indigo-600 hover:bg-indigo-500'
+                        }`}
+                      >
                         <ShoppingCart size={14} /> {link.storeName}
                       </a>
                     ))}
@@ -350,28 +354,42 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
           )}
           
           {analysis.error && (
-            <div className="p-6 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-amber-200 text-sm flex flex-col gap-3">
-              <div className="flex items-center gap-2 font-bold"><AlertCircle size={16} /> Analysis Notice</div>
-              <p>{analysis.error}</p>
-              <button onClick={() => handlePauseAndAnalyze()} className="text-indigo-400 font-bold hover:underline">Retry Analysis</button>
+            <div className="p-6 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-amber-200 text-sm flex flex-col gap-4">
+              <div className="flex items-center gap-2 font-bold"><AlertCircle size={18} /> Analysis Notice</div>
+              <p className="leading-relaxed">{analysis.error}</p>
+              <button onClick={() => handlePauseAndAnalyze()} className="bg-amber-500/20 text-amber-400 py-3 rounded-xl font-bold hover:bg-amber-500/30 transition-all flex items-center justify-center gap-2">
+                <RefreshCw size={14} /> Retry Analysis
+              </button>
             </div>
           )}
 
-          {!isPaused && (
-             <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-50">
-               <Play size={40} />
-               <p className="text-sm font-bold uppercase tracking-widest">Pause Video to Discover Products</p>
+          {!isPaused && !analysis.isAnalyzing && (
+             <div className="h-full flex flex-col items-center justify-center text-center space-y-6 opacity-50 px-10">
+               <div className="p-6 rounded-full bg-white/5 animate-pulse">
+                <Pause size={48} />
+               </div>
+               <p className="text-sm font-bold uppercase tracking-[0.2em]">Pause Video to Discover Products</p>
+               <p className="text-xs text-gray-500">The AI will scan the exact frame you stop on.</p>
              </div>
+          )}
+
+          {analysis.isAnalyzing && (
+            <div className="h-full flex flex-col items-center justify-center text-center space-y-4">
+              <Loader2 size={40} className="animate-spin text-indigo-500" />
+              <p className="text-indigo-400 font-bold animate-pulse">RECOGNIZING OBJECTS...</p>
+            </div>
           )}
         </div>
       </div>
       
       <style>{`
         @keyframes scan-line {
-          0% { top: 0; }
-          100% { top: 100%; }
+          0% { transform: translateY(-100%); opacity: 0; }
+          10% { opacity: 1; }
+          90% { opacity: 1; }
+          100% { transform: translateY(100vh); opacity: 0; }
         }
-        .animate-scan-line { animation: scan-line 2s linear infinite; }
+        .animate-scan-line { animation: scan-line 2s ease-in-out infinite; }
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
       `}</style>
