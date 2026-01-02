@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { DetectedProduct } from "../types";
 
@@ -24,12 +23,17 @@ const parseGeminiJson = (text: string) => {
 };
 
 export const analyzeFrame = async (base64Image: string): Promise<DetectedProduct[]> => {
-  // Initializing GoogleGenAI right before the call to ensure freshness
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // 1. PASTE YOUR API KEY HERE BETWEEN THE QUOTES
+  // Example: const apiKey = "AIzaSy..."
+  const apiKey = "AIzaSyDOsdFCxWPnpmlwqnD2CzewJUU6OTIX4Us"; 
+
+  // Initializing GoogleGenAI with the key
+  const ai = new GoogleGenAI({ apiKey: apiKey });
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      // Note: If you get a "Model not found" error, change this to "gemini-1.5-flash"
+      model: "gemini-2.5-flash", 
       contents: [
         {
           parts: [
