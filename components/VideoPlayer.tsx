@@ -1,4 +1,3 @@
-
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Movie, DetectedProduct, AnalysisState } from '../types';
 import { analyzeFrame } from '../services/gemini';
@@ -72,6 +71,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) throw new Error("Could not get canvas context");
 
+      // FIXED: Correct high-res YouTube thumbnail URL
       const thumbUrl = `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`;
       const proxyUrl = `https://images.weserv.nl/?url=${encodeURIComponent(thumbUrl)}`;
       
@@ -109,59 +109,33 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
 
     if (!video || !canvas || videoError) return;
 
-    // Reset analysis UI
     setAnalysis({ isAnalyzing: true, products: [], error: null });
 
     try {
-      // Ensure video metadata is actually ready
-      if (video.readyState < 2) {
-        throw new Error("Video data not ready for capture. Please try pausing again.");
-      }
+      if (video.readyState < 2) throw new Error("Video data not ready.");
 
       const context = canvas.getContext('2d', { willReadFrequently: true });
-      if (!context) throw new Error("Failed to initialize canvas context.");
+      if (!context) throw new Error("Failed canvas context.");
 
-      // Use actual video dimensions
       const width = video.videoWidth || 1280;
       const height = video.videoHeight || 720;
-      
       canvas.width = width;
       canvas.height = height;
 
-      // Small delay to ensure the 'pause' frame is actually rendered by the GPU
       await new Promise(resolve => setTimeout(resolve, 300));
+      context.drawImage(video, 0, 0, width, height);
 
-      try {
-        context.drawImage(video, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        
-        // Final sanity check: dataURL should be reasonably long
-        if (dataUrl.length < 1000) {
-          throw new Error("Captured frame is empty or corrupted.");
-        }
-
-        const base64Image = dataUrl.split(',')[1];
-        const detectedProducts = await analyzeFrame(base64Image);
-        
-        setAnalysis({
-          isAnalyzing: false,
-          products: detectedProducts,
-          error: null,
-        });
-      } catch (drawErr: any) {
-        console.error("Frame capture failure:", drawErr);
-        setAnalysis({
-          isAnalyzing: false,
-          products: [],
-          error: `Frame capture failed: ${drawErr.message || "Unknown error"}.`,
-        });
-      }
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      const base64Image = dataUrl.split(',')[1];
+      const detectedProducts = await analyzeFrame(base64Image);
+      
+      setAnalysis({ isAnalyzing: false, products: detectedProducts, error: null });
     } catch (err: any) {
       console.error("Analysis sequence failure:", err);
       setAnalysis({
         isAnalyzing: false,
         products: [],
-        error: err.message || "Failed to initiate AI analysis. Please check your internet connection.",
+        error: `Frame capture failed: ${err.message || "Unknown error"}.`,
       });
     }
   }, [videoError, isYouTube, getYTId, isLocal]);
@@ -193,13 +167,9 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
     };
 
     if (!window.YT) {
-      if (!document.getElementById('youtube-api')) {
-        const tag = document.createElement('script');
-        tag.id = 'youtube-api';
-        tag.src = "https://www.youtube.com/iframe_api";
-        const firstScriptTag = document.getElementsByTagName('script')[0];
-        firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
-      }
+      const tag = document.createElement('script');
+      tag.src = "https://www.youtube.com/iframe_api";
+      document.body.appendChild(tag);
       window.onYouTubeIframeAPIReady = createPlayer;
     } else {
       createPlayer();
@@ -338,11 +308,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ movie, onClose }) => {
                         href={link.url} 
                         target="_blank" 
                         rel="noopener noreferrer" 
-                        className={`flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-xs transition-all active:scale-95 ${
-                          link.storeName.toLowerCase().includes('amazon') ? 'bg-orange-600 hover:bg-orange-500' :
-                          link.storeName.toLowerCase().includes('flipkart') ? 'bg-blue-600 hover:bg-blue-500' :
-                          'bg-indigo-600 hover:bg-indigo-500'
-                        }`}
+                        className="flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-xs bg-indigo-600 hover:bg-indigo-500 transition-all active:scale-95"
                       >
                         <ShoppingCart size={14} /> {link.storeName}
                       </a>
